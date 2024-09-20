@@ -95,6 +95,7 @@ if __name__ == '__main__':
 
         # Prepare data
         batch = recursive_to(next(train_iterator), args.device)
+        print(batch)
 
         # Forward
         # if args.debug: torch.set_anomaly_enabled(True)

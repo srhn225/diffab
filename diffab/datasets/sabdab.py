@@ -208,9 +208,11 @@ class SAbDabDataset(Dataset):
         split_seed = 2022,
         transform = None,
         reset = False,
+        filter_invalid = False
     ):
         super().__init__()
         self.summary_path = summary_path
+        self.filter_invalid=filter_invalid
         self.chothia_dir = chothia_dir
         if not os.path.exists(chothia_dir):
             raise FileNotFoundError(
@@ -235,6 +237,20 @@ class SAbDabDataset(Dataset):
         self._load_split(split, split_seed)
 
         self.transform = transform
+                # 如果设置了filter_invalid，就过滤掉无效条目
+
+    def filter_invalid_entries(self):
+        """过滤掉heavy、light或antigen链为空的数据条目"""
+        self._connect_db()  # 确保数据库已连接
+        valid_entries = []
+        for entry in self.sabdab_entries:
+            structure = self.get_structure(entry['id'])
+            if structure['heavy'] is not None and structure['light'] is not None and structure['antigen'] is not None:
+                valid_entries.append(entry)
+        print(f"总数量: {len(self.sabdab_entries)}")
+        self.sabdab_entries = valid_entries
+        print(f"过滤后剩余有效条目数量: {len(self.sabdab_entries)}")
+
 
     def _load_sabdab_entries(self):
         df = pd.read_csv(self.summary_path, sep='\t')
@@ -287,12 +303,19 @@ class SAbDabDataset(Dataset):
 
         with open(self._structure_cache_path + '-ids', 'rb') as f:
             self.db_ids = pickle.load(f)
+        
+        # 过滤无效的结构数据
         self.sabdab_entries = list(
             filter(
                 lambda e: e['id'] in self.db_ids,
                 self.sabdab_entries
             )
         )
+
+        # 这里可以插入过滤无效条目的逻辑
+        if self.filter_invalid:
+            self.filter_invalid_entries()
+
 
     @property
     def _structure_cache_path(self):
@@ -447,6 +470,7 @@ def get_sabdab_dataset(cfg, transform):
         split = cfg.split,
         split_seed = cfg.get('split_seed', 2022),
         transform = transform,
+        filter_invalid = cfg.get('filter', False)
     )
 
 
@@ -466,5 +490,5 @@ if __name__ == '__main__':
         split=args.split, 
         reset=args.reset
     )
-    print(dataset[0])
+    print(dataset[114])
     print(len(dataset), len(dataset.clusters))

@@ -28,9 +28,18 @@ def rotation_matrix_cosine_loss(R_pred, R_true):
     loss = F.cosine_embedding_loss(RT_pred, RT_true, ones, reduction='none')  # (ncol*3, )
     loss = loss.reshape(size + [3]).sum(dim=-1)    # (*, )
     return loss
-
+'''
+rotation_matrix_cosine_loss： 计算预测旋转矩阵（R_pred）与真实旋转矩阵（R_true）之间的余弦损失。它使用了 PyTorch 的 cosine_embedding_loss 函数，将两个旋转矩阵的列向量转换成平面的向量进行比较。
+'''
 
 class EpsilonNet(nn.Module):
+    '''
+    EpsilonNet 是一个神经网络，用于预测蛋白质残基的位置变化（eps_crd_net）、旋转变化（eps_rot_net）和氨基酸序列的分类分布（eps_seq_net）。
+
+forward 方法接收当前的旋转向量（v_t）、位置（p_t）、序列（s_t）、残基特征（res_feat）和配对特征（pair_feat），并预测下一个时间步的旋转向量、旋转矩阵、位置变化和序列分类分布。
+若要结合RAG的方法，则需要在此步的输入特征中进行部分的修改，使得去噪过程与检索到的特征相关。
+去噪
+    '''
 
     def __init__(self, res_feat_dim, pair_feat_dim, num_layers, encoder_opt={}):
         super().__init__()
@@ -112,14 +121,14 @@ class FullDPM(nn.Module):
         eps_net_opt={}, 
         trans_rot_opt={}, 
         trans_pos_opt={}, 
-        trans_seq_opt={},
+        trans_seq_opt={}, 
         position_mean=[0.0, 0.0, 0.0],
         position_scale=[10.0],
     ):
         super().__init__()
         self.eps_net = EpsilonNet(res_feat_dim, pair_feat_dim, **eps_net_opt)
         self.num_steps = num_steps
-        self.trans_rot = RotationTransition(num_steps, **trans_rot_opt)
+        self.trans_rot = RotationTransition(num_steps, **trans_rot_opt)#加噪声模块
         self.trans_pos = PositionTransition(num_steps, **trans_pos_opt)
         self.trans_seq = AminoacidCategoricalTransition(num_steps, **trans_seq_opt)
 
