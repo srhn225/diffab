@@ -256,6 +256,6 @@ class diffabencoder(nn.Module):
         res_feat = self.encoder(R_0, p_0, res_feat, pair_feat, mask_res)
 
         # New part: Apply a linear layer to map each residue feature to a scalar
-        # res_feat = self.final_linear(res_feat).squeeze(-1)  # Output shape: (N, L)
+        res_feat = self.final_linear(res_feat).squeeze(-1)  # Output shape: (N, L)
 
         return res_feat

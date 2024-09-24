@@ -58,6 +58,8 @@ def train(args, model, loader, optimizer, scheduler, logger, writer, device='cud
             for batch_idx, batch in enumerate(loader):
                 # 递归将 batch 中所有张量移动到指定设备上（如GPU）
                 batch = recursive_to(batch, device)
+                # stats = torch.cuda.memory_summary()
+                # print(stats)
 
                 # 前向传播
                 loss = model(batch)
@@ -137,6 +139,8 @@ if __name__ == "__main__":
 
     # 模型初始化
     model = ContrastiveDiffAb(config.model).to(args.device)
+
+
 
     optimizer = get_optimizer(config.train.optimizer, model)
     scheduler = get_scheduler(config.train.scheduler, optimizer)
