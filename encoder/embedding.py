@@ -259,3 +259,82 @@ class diffabencoder(nn.Module):
         res_feat = self.final_linear(res_feat).squeeze(-1)  # Output shape: (N, L)
 
         return res_feat
+
+
+class mlpencoder(nn.Module):
+
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+        self.res_feat_dim = cfg.res_feat_dim
+
+        num_atoms = resolution_to_num_atoms[cfg.get('resolution', 'full')]
+        self.residue_embed = ResidueEmbedding(cfg.res_feat_dim, num_atoms)
+        self.pair_embed = PairEmbedding(cfg.pair_feat_dim, num_atoms)
+        self.res_feat_mixer = nn.Sequential(
+            nn.Linear(cfg.res_feat_dim * 2, cfg.res_feat_dim), nn.ReLU(),
+            nn.Linear(cfg.res_feat_dim, cfg.res_feat_dim),
+        )
+        self.current_sequence_embedding = nn.Embedding(25, cfg.res_feat_dim)  # 22 is padding
+
+        # Using a simple feed-forward neural network for encoding instead of GAEncoder
+        self.simple_encoder = nn.Sequential(
+            nn.Linear(cfg.res_feat_dim, cfg.res_feat_dim),
+            nn.ReLU(),
+            nn.Linear(cfg.res_feat_dim, cfg.res_feat_dim),
+            nn.ReLU(),
+            nn.Linear(cfg.res_feat_dim, cfg.res_feat_dim),
+        )
+
+        # Final linear layer to map features down to a single value
+        self.final_linear = nn.Linear(cfg.res_feat_dim, 1)
+
+    def encode(self, batch):
+        """
+        Returns:
+            res_feat:   (N, L, res_feat_dim)
+            pair_feat:  (N, L, L, pair_feat_dim)
+        """
+        structure_mask = None
+        sequence_mask = None
+
+        res_feat = self.residue_embed(
+            aa=batch['aa'],
+            res_nb=batch['res_nb'],
+            pos_atoms=batch['pos_heavyatom'],
+            mask_atoms=batch['mask_heavyatom'],
+            structure_mask=structure_mask,
+            sequence_mask=sequence_mask,
+        )
+
+        pair_feat = self.pair_embed(
+            aa=batch['aa'],
+            res_nb=batch['res_nb'],
+            pos_atoms=batch['pos_heavyatom'],
+            mask_atoms=batch['mask_heavyatom'],
+            structure_mask=structure_mask,
+            sequence_mask=sequence_mask,
+        )
+
+        R = construct_3d_basis(
+            batch['pos_heavyatom'][:, :, BBHeavyAtom.CA],
+            batch['pos_heavyatom'][:, :, BBHeavyAtom.C],
+            batch['pos_heavyatom'][:, :, BBHeavyAtom.N],
+        )
+        p = batch['pos_heavyatom'][:, :, BBHeavyAtom.CA]
+
+        return res_feat, pair_feat, R, p
+
+    def forward(self, batch):
+        mask_res = batch['mask']
+        res_feat, pair_feat, R_0, p_0 = self.encode(batch)
+        s_0 = batch['aa']
+        res_feat = self.res_feat_mixer(torch.cat([res_feat, self.current_sequence_embedding(s_0)], dim=-1))
+
+        # Apply simple feed-forward network for encoding
+        res_feat = self.simple_encoder(res_feat)
+
+        # Apply a linear layer to map each residue feature to a scalar
+        res_feat = self.final_linear(res_feat).squeeze(-1)  # Output shape: (N, L)
+
+        return res_feat

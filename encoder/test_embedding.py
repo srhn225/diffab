@@ -94,7 +94,8 @@ def train(args, model, loader, optimizer, scheduler, logger, writer, device='cud
         # 每个epoch结束时记录学习率（如果使用了调度器）
         if scheduler is not None:
             writer.add_scalar('train/lr', scheduler.get_last_lr()[0], global_step)
-
+        del loss, batch
+        torch.cuda.empty_cache()
     logger.info('Training complete.')
 
 if __name__ == "__main__":
