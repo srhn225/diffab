@@ -259,25 +259,96 @@ class diffabencoder(nn.Module):
         res_feat = self.final_linear(res_feat).squeeze(-1)  # Output shape: (N, L)
 
         return res_feat
+class EZPairEmbedding(nn.Module):
+
+    def __init__(self, feat_dim, max_num_atoms, max_aa_types=22, max_relpos=32):  # 更进一步缩小参数
+        super().__init__()
+        self.max_num_atoms = max_num_atoms
+        self.max_aa_types = max_aa_types
+        self.max_relpos = max_relpos
+        
+        # 保留基本的氨基酸和相对位置嵌入
+        self.aa_pair_embed = nn.Embedding(self.max_aa_types * self.max_aa_types, feat_dim)
+        self.relpos_embed = nn.Embedding(2 * max_relpos + 1, feat_dim)
+
+        infeat_dim = feat_dim * 2  # 相对位置和氨基酸对嵌入的特征维度
+        self.out_mlp = nn.Sequential(
+            nn.Linear(infeat_dim, feat_dim), nn.ReLU(),
+            nn.Linear(feat_dim, feat_dim),
+        )
+
+    def forward(self, aa, res_nb, pos_atoms, mask_atoms, structure_mask=None, sequence_mask=None):
+        N, L = aa.size()
+
+        # Remove other atoms, directly use CA atom, reducing computational complexity
+        mask_residue = mask_atoms[:, :, BBHeavyAtom.CA]
+        mask_pair = mask_residue[:, :, None] * mask_residue[:, None, :]
+
+        # Pair identities
+        if sequence_mask is not None:
+            aa = torch.where(sequence_mask, aa, torch.full_like(aa, fill_value=AA.UNK))
+        aa_pair = aa[:, :, None] * self.max_aa_types + aa[:, None, :]
+        feat_aapair = self.aa_pair_embed(aa_pair)
+
+        # Relative sequential positions
+        relpos = torch.clamp(
+            res_nb[:, :, None] - res_nb[:, None, :],
+            min=-self.max_relpos, max=self.max_relpos,
+        )
+        feat_relpos = self.relpos_embed(relpos + self.max_relpos)
+
+        # Only keeping amino acid pair and relative position embeddings
+        feat_all = torch.cat([feat_aapair, feat_relpos], dim=-1)
+        feat_all = self.out_mlp(feat_all)
+        feat_all = feat_all * mask_pair[:, :, :, None]
+
+        return feat_all
+
+
+class EZResidueEmbedding(nn.Module):
+
+    def __init__(self, feat_dim, max_num_atoms, max_aa_types=22):
+        super().__init__()
+        self.max_num_atoms = max_num_atoms
+        self.max_aa_types = max_aa_types
+        self.aatype_embed = nn.Embedding(self.max_aa_types, feat_dim)
+
+        infeat_dim = feat_dim  # 只有氨基酸特征的嵌入
+        self.mlp = nn.Sequential(
+            nn.Linear(infeat_dim, feat_dim), nn.ReLU(),
+            nn.Linear(feat_dim, feat_dim)
+        )
+
+    def forward(self, aa, res_nb, pos_atoms, mask_atoms, structure_mask=None, sequence_mask=None):
+        N, L = aa.size()
+        mask_residue = mask_atoms[:, :, BBHeavyAtom.CA]
+
+        # Amino acid identity features
+        if sequence_mask is not None:
+            aa = torch.where(sequence_mask, aa, torch.full_like(aa, fill_value=AA.UNK))
+        aa_feat = self.aatype_embed(aa)
+
+        # Directly pass through amino acid embedding without 3D positional or angular encoding
+        out_feat = self.mlp(aa_feat)
+        out_feat = out_feat * mask_residue[:, :, None]
+        return out_feat
 
 
 class mlpencoder(nn.Module):
-
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
         self.res_feat_dim = cfg.res_feat_dim
 
         num_atoms = resolution_to_num_atoms[cfg.get('resolution', 'full')]
-        self.residue_embed = ResidueEmbedding(cfg.res_feat_dim, num_atoms)
-        self.pair_embed = PairEmbedding(cfg.pair_feat_dim, num_atoms)
+        self.residue_embed = EZResidueEmbedding(cfg.res_feat_dim, num_atoms)
+        self.pair_embed = EZPairEmbedding(cfg.pair_feat_dim, num_atoms)
         self.res_feat_mixer = nn.Sequential(
             nn.Linear(cfg.res_feat_dim * 2, cfg.res_feat_dim), nn.ReLU(),
             nn.Linear(cfg.res_feat_dim, cfg.res_feat_dim),
         )
-        self.current_sequence_embedding = nn.Embedding(25, cfg.res_feat_dim)  # 22 is padding
+        self.current_sequence_embedding = nn.Embedding(25, cfg.res_feat_dim)
 
-        # Using a simple feed-forward neural network for encoding instead of GAEncoder
         self.simple_encoder = nn.Sequential(
             nn.Linear(cfg.res_feat_dim, cfg.res_feat_dim),
             nn.ReLU(),
@@ -286,15 +357,10 @@ class mlpencoder(nn.Module):
             nn.Linear(cfg.res_feat_dim, cfg.res_feat_dim),
         )
 
-        # Final linear layer to map features down to a single value
-        self.final_linear = nn.Linear(cfg.res_feat_dim, 1)
+        # Adding an adaptive pooling layer to get the output of shape (N, 100, feat_dim)
+        self.adaptive_pool = nn.AdaptiveAvgPool1d(100)  # Change to nn.AdaptiveMaxPool1d if needed
 
     def encode(self, batch):
-        """
-        Returns:
-            res_feat:   (N, L, res_feat_dim)
-            pair_feat:  (N, L, L, pair_feat_dim)
-        """
         structure_mask = None
         sequence_mask = None
 
@@ -331,10 +397,16 @@ class mlpencoder(nn.Module):
         s_0 = batch['aa']
         res_feat = self.res_feat_mixer(torch.cat([res_feat, self.current_sequence_embedding(s_0)], dim=-1))
 
-        # Apply simple feed-forward network for encoding
         res_feat = self.simple_encoder(res_feat)
 
-        # Apply a linear layer to map each residue feature to a scalar
-        res_feat = self.final_linear(res_feat).squeeze(-1)  # Output shape: (N, L)
+        # Transpose to (N, feat_dim, L) for adaptive pooling
+        res_feat = res_feat.permute(0, 2, 1)
+
+        # Apply adaptive pooling to get (N, feat_dim, 100)
+        res_feat = self.adaptive_pool(res_feat)
+
+        # Transpose back to (N, 100, feat_dim)
+        res_feat = res_feat.permute(0, 2, 1)
 
         return res_feat
+

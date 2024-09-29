@@ -130,21 +130,17 @@ class PaddingCollate_unmerged(object):
         if key not in self.pad_values:
             return 0
         return self.pad_values[key]
-
     def __call__(self, data_list):
-        # Calculate max length across heavy, light, and antigen
+        # Calculate max length for each tag individually
         max_lengths = {
             'heavy': max([data['heavy'][self.length_ref_key].size(0) for data in data_list]),
             'light': max([data['light'][self.length_ref_key].size(0) for data in data_list]),
             'antigen': max([data['antigen'][self.length_ref_key].size(0) for data in data_list])
         }
 
-        # Get the overall maximum length across all three tags
-        overall_max_length = max(max_lengths.values())
-
-        # If we need to align to a multiple of 8, adjust the overall maximum length
+        # Adjust max lengths to be multiples of 8 if required
         if self.eight:
-            overall_max_length = math.ceil(overall_max_length / 8) * 8
+            max_lengths = {k: math.ceil(v / 8) * 8 for k, v in max_lengths.items()}
 
         data_list_padded = []
 
@@ -152,24 +148,64 @@ class PaddingCollate_unmerged(object):
         for data in data_list:
             data_padded = {}
 
-            # Handle each tag (heavy, light, antigen)
+            # Handle each tag (heavy, light, antigen) separately
             for tag in ['heavy', 'light', 'antigen']:
                 # Get common keys for the current tag across all data entries
                 keys = self._get_common_keys([d[tag] for d in data_list])
 
-                # Pad each key's content to the overall max length
+                # Pad each key's content to the max length for the current tag
                 data_padded[tag] = {
-                    k: self._pad_last(data[tag][k], overall_max_length, value=self._get_pad_value(k))
+                    k: self._pad_last(data[tag][k], max_lengths[tag], value=self._get_pad_value(k))
                     if k not in self.no_padding else data[tag][k]
                     for k in data[tag] if k in keys
                 }
 
                 # Add mask
-                data_padded[tag]['mask'] = self._get_pad_mask(data[tag][self.length_ref_key].size(0), overall_max_length)
+                data_padded[tag]['mask'] = self._get_pad_mask(data[tag][self.length_ref_key].size(0), max_lengths[tag])
 
             data_list_padded.append(data_padded)
 
         return default_collate(data_list_padded)
+
+    # def __call__(self, data_list):
+    #     # Calculate max length across heavy, light, and antigen
+    #     max_lengths = {
+    #         'heavy': max([data['heavy'][self.length_ref_key].size(0) for data in data_list]),
+    #         'light': max([data['light'][self.length_ref_key].size(0) for data in data_list]),
+    #         'antigen': max([data['antigen'][self.length_ref_key].size(0) for data in data_list])
+    #     }
+
+    #     # Get the overall maximum length across all three tags
+    #     overall_max_length = max(max_lengths.values())
+
+    #     # If we need to align to a multiple of 8, adjust the overall maximum length
+    #     if self.eight:
+    #         overall_max_length = math.ceil(overall_max_length / 8) * 8
+
+    #     data_list_padded = []
+
+    #     # Process each data entry in data_list
+    #     for data in data_list:
+    #         data_padded = {}
+
+    #         # Handle each tag (heavy, light, antigen)
+    #         for tag in ['heavy', 'light', 'antigen']:
+    #             # Get common keys for the current tag across all data entries
+    #             keys = self._get_common_keys([d[tag] for d in data_list])
+
+    #             # Pad each key's content to the overall max length
+    #             data_padded[tag] = {
+    #                 k: self._pad_last(data[tag][k], overall_max_length, value=self._get_pad_value(k))
+    #                 if k not in self.no_padding else data[tag][k]
+    #                 for k in data[tag] if k in keys
+    #             }
+
+    #             # Add mask
+    #             data_padded[tag]['mask'] = self._get_pad_mask(data[tag][self.length_ref_key].size(0), overall_max_length)
+
+    #         data_list_padded.append(data_padded)
+
+    #     return default_collate(data_list_padded)
 
 
 

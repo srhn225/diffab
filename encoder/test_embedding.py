@@ -63,10 +63,10 @@ def train(args, model, loader, optimizer, scheduler, logger, writer, device='cud
 
                 # 前向传播
                 loss = model(batch)
-
+                loss.backward()  # 反向传播计算梯度
                 # 反向传播和优化步骤
                 optimizer.zero_grad()  # 梯度清零
-                loss.backward()  # 反向传播计算梯度
+                
                 optimizer.step()  # 优化器更新参数
 
                 # 更新学习率调度器（如果有）
@@ -79,6 +79,7 @@ def train(args, model, loader, optimizer, scheduler, logger, writer, device='cud
                 pbar.update(1)
 
                 global_step += 1
+                del loss, batch
 
         # 保存模型检查点
         if (epoch + 1) % args.save_freq == 0:
@@ -92,9 +93,9 @@ def train(args, model, loader, optimizer, scheduler, logger, writer, device='cud
             logger.info(f"Model saved to {save_path}")
 
         # 每个epoch结束时记录学习率（如果使用了调度器）
-        if scheduler is not None:
-            writer.add_scalar('train/lr', scheduler.get_last_lr()[0], global_step)
-        del loss, batch
+        # if scheduler is not None:
+        #     writer.add_scalar('train/lr', scheduler.get_last_lr()[0], global_step)
+
         torch.cuda.empty_cache()
     logger.info('Training complete.')
 

@@ -1,8 +1,8 @@
 
 model:
   type: mlp
-  res_feat_dim: 2
-  pair_feat_dim: 1
+  res_feat_dim: 12
+  pair_feat_dim: 6
 
 dataset:
     type: sabdab
@@ -22,13 +22,13 @@ train:
     seq: 1.0
   max_iters: 200_000
   val_freq: 1000
-  batch_size: 2
+  batch_size: 3
   seed: 2022
   max_grad_norm: 100.0
   optimizer:
     type: adam
     lr: 1.e-4
-    weight_decay: 0.0
+    weight_decay: 0
     beta1: 0.9
     beta2: 0.999
   scheduler:
