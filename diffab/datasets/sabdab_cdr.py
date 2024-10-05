@@ -16,7 +16,7 @@ from tqdm.auto import tqdm
 from Bio.PDB import NeighborSearch
 from ..utils.protein import parsers, constants
 from ._base import register_dataset
-
+import numpy as np
 
 ALLOWED_AG_TYPES = {
     'protein',
@@ -133,7 +133,6 @@ def _label_light_chain_cdr(data, seq_map, max_cdr3_length=30):
 
     return data, seq_map
 
-from Bio.PDB import NeighborSearch
 
 def preprocess_sabdab_structure(task):
     entry = task['entry']
@@ -141,6 +140,7 @@ def preprocess_sabdab_structure(task):
 
     parser = PDB.PDBParser(QUIET=True)
     model = parser.get_structure(id, pdb_path)[0]
+
 
     parsed = {
         'id': entry['id'],
@@ -153,85 +153,130 @@ def preprocess_sabdab_structure(task):
     }
 
     try:
-        # 检查重链和轻链的存在性，如果缺少则跳过这个条目
-        if entry['H_chain'] is None and entry['L_chain'] is None:
+        # 检查重链和轻链的存在性
+        if entry['H_chain'] is None or entry['L_chain'] is None:
             raise ValueError('Missing both heavy and light chains.')
-
-        if entry['H_chain'] is not None:
-            (
-                parsed['heavy'], 
-                parsed['heavy_seqmap']
-            ) = _label_heavy_chain_cdr(*parsers.parse_biopython_structure(
-                model[entry['H_chain']],
-                max_resseq=113    # Chothia, end of Heavy chain Fv
-            ))
-        
-        if entry['L_chain'] is not None:
-            (
-                parsed['light'], 
-                parsed['light_seqmap']
-            ) = _label_light_chain_cdr(*parsers.parse_biopython_structure(
-                model[entry['L_chain']],
-                max_resseq=106    # Chothia, end of Light chain Fv
-            ))
-
-        # 如果重链or轻链不存在，则跳过此条目
-        if parsed['heavy'] is None or parsed['light'] is None:
-            raise ValueError('valid heavy or light chain is not found.')
-
         # 检查抗原链是否存在
         if len(entry['ag_chains']) == 0:
             raise ValueError('No antigen chains found.')
 
-        # 如果存在抗原链，解析抗原链
-        chains = [model[c] for c in entry['ag_chains']]
-        (
-            parsed['antigen'], 
-            parsed['antigen_seqmap']
-        ) = parsers.parse_biopython_structure(chains)
-
-        # 创建 NeighborSearch 对象，包含抗体和抗原的所有原子
-        antibody_atoms = []
+        # 处理重链
         if entry['H_chain'] is not None:
-            antibody_atoms += list(model[entry['H_chain']].get_atoms())
+            heavy_residues, heavy_seqmap = _label_heavy_chain_cdr(
+                *parsers.parse_biopython_structure(model[entry['H_chain']], max_resseq=113)
+            )
+            # 使用序列编号过滤CDR区域
+            if heavy_residues is not None and heavy_seqmap is not None:
+                cdr_flag=heavy_residues['cdr_flag']
+                # 获取所有字典键（字典的键是三元组）
+                seq_keys = list(heavy_seqmap.keys())
+
+                # 遍历键，根据cdr_flag筛选出对应的值
+                parsed['heavy_seqmap'] = {
+                    key: heavy_seqmap[key] 
+                    for i, key in enumerate(seq_keys) 
+                    if cdr_flag[i] > 0
+                }
+                for key in heavy_residues:
+                    if isinstance(heavy_residues[key], torch.Tensor):
+                        heavy_residues[key] = heavy_residues[key][cdr_flag > 0]  # 更新字典中的原始元素
+                    if isinstance(heavy_residues[key],list):
+                        heavy_residues[key] = [item for i, item in enumerate(heavy_residues[key]) if cdr_flag[i] > 0]
+                
+                parsed['heavy']=heavy_residues
+
+        # 处理轻链
         if entry['L_chain'] is not None:
-            antibody_atoms += list(model[entry['L_chain']].get_atoms())
-        
-        antigen_atoms = [atom for chain in chains for atom in chain.get_atoms()]
-        ns = NeighborSearch(antigen_atoms + antibody_atoms)
+            light_residues, light_seqmap = _label_light_chain_cdr(
+                *parsers.parse_biopython_structure(model[entry['L_chain']], max_resseq=106)
+            )
+            # 使用序列编号过滤CDR区域
+            if light_residues is not None and light_seqmap is not None:
+                cdr_flag=light_residues['cdr_flag']
+                # 获取所有字典键（字典的键是三元组）
+                seq_keys = list(light_seqmap.keys())
 
-        # 搜索抗原和抗体原子之间距离小于10 Å 的原子对
-        contact_pairs = ns.search_all(10.0)
+                # 遍历键，根据cdr_flag筛选出对应的值
+                parsed['light_seqmap'] = {
+                    key: light_seqmap[key] 
+                    for i, key in enumerate(seq_keys) 
+                    if cdr_flag[i] > 0
+                }
 
-        # 获取接触的抗原和抗体残基
-        antigen_residues = set()
-        antibody_residues = set()
+                for key in light_residues:
+                    if isinstance(light_residues[key], torch.Tensor):
+                        light_residues[key] = light_residues[key][cdr_flag > 0]  # 更新字典中的原始元素
+                    if isinstance(light_residues[key],list):
+                        light_residues[key] = [item for i, item in enumerate(light_residues[key]) if cdr_flag[i] > 0]
+                parsed['light']=light_residues
+        if parsed['heavy'] is None and parsed['light'] is None:
+            raise ValueError('Neither valid H-chaincdr or L-chaincdr is found.')       
 
-        for atom1, atom2 in contact_pairs:
-            if atom1.get_parent().get_parent().id in entry['ag_chains']:  # 抗原链
-                antigen_residues.add(atom1.get_parent())
-            if atom2.get_parent().get_parent().id in [entry['H_chain'], entry['L_chain']]:  # 抗体链
-                antibody_residues.add(atom2.get_parent())
+        # 处理抗原链
+        if len(entry['ag_chains']) > 0:
+            chains = [model[c] for c in entry['ag_chains']]
 
-        # 只保留距离小于10 Å 的残基及其原子
-        parsed['antigen'] = antigen_residues
-        parsed['heavy'] = {res for res in antibody_residues if res.get_parent().id == entry['H_chain']}
-        parsed['light'] = {res for res in antibody_residues if res.get_parent().id == entry['L_chain']}
 
-    except (
-        PDBExceptions.PDBConstructionException, 
-        parsers.ParsingException, 
-        KeyError,
-        ValueError,
-    ) as e:
-        logging.warning('[{}] {}: {}'.format(
-            task['id'], 
-            e.__class__.__name__, 
-            str(e)
-        ))
+            # 获取所有抗体（重链和轻链）的原子用于邻近搜索
+            antibody_atoms = []
+            if parsed['heavy'] is not None:
+                for heavy_res in model[entry['H_chain']].get_residues():
+                    antibody_atoms.extend(heavy_res.get_atoms())
+            if parsed['light'] is not None:
+                for light_res in model[entry['L_chain']].get_residues():
+                    antibody_atoms.extend(light_res.get_atoms())
+            parsed['antigen'], parsed['antigen_seqmap'] = parsers.parse_biopython_structure_antigen(chains,antibody_atoms=antibody_atoms)
+
+
+            # # 使用NeighborSearch进行抗原链-抗体链原子接触搜索
+            # ns = NeighborSearch(antibody_atoms)
+
+            # # 生成抗原链的布尔掩码，判断每个残基是否与抗体链的原子距离小于10Å
+            # contact_mask = []
+            # for chain in chains:
+            #     chain_contacts = []
+            #     for antigen_res in chain.get_residues():
+            #         antigen_atom_positions = np.array([atom.get_coord() for atom in antigen_res.get_atoms()])
+
+            #         # 计算坐标的平均值
+            #         average_position = np.mean(antigen_atom_positions, axis=0)
+
+
+
+            #         # 使用邻近搜索找出距离小于10Å的原子
+            #         close_atoms = ns.search(average_position,10.0)
+            #         # 如果有任意原子在10Å以内，标记为True，否则为False
+            #         chain_contacts.append(len(close_atoms) > 0)
+            #     contact_mask.append(torch.tensor(chain_contacts, dtype=torch.bool))
+
+            # long_mask = torch.cat(contact_mask, dim=0)  # 保存接触掩码
+
+            # seq_keys = list(antigen_seqmap.keys())
+
+
+            # parsed['antigen_seqmap'] = {
+            #     key: antigen_seqmap[key] 
+            #     for i, key in enumerate(seq_keys) 
+            #     if long_mask[i]
+            # }
+
+            # for key in antigen_residue:
+            #     if isinstance(antigen_residue[key], torch.Tensor):
+            #         antigen_residue[key] = antigen_residue[key][long_mask]  # 更新字典中的原始元素
+            #     if isinstance(light_residues[key],list):
+            #         antigen_residue[key] = [item for i, item in enumerate(antigen_residue[key]) if long_mask[i] > 0]
+            # parsed['antigen']=antigen_residue            
+
+
+
+
+    except (PDBExceptions.PDBConstructionException, parsers.ParsingException, KeyError, ValueError) as e:
+        logging.warning(f"[{task['id']}] {e.__class__.__name__}: {str(e)}")
         return None
-
+    
     return parsed
+
+
 
 
 
@@ -359,7 +404,7 @@ class SAbDabCDRDataset(Dataset):
 
     @property
     def _structure_cache_path(self):
-        return os.path.join(self.processed_dir, 'structures-10a.lmdb')
+        return os.path.join(self.processed_dir, 'structures-cdr.lmdb')
         
     def _preprocess_structures(self):
         tasks = []
@@ -501,7 +546,7 @@ class SAbDabCDRDataset(Dataset):
         return data
 
 
-@register_dataset('sabdab')
+@register_dataset('sabdabcdr')
 def get_sabdab_dataset(cfg, transform):
     return SAbDabCDRDataset(
         summary_path = cfg.summary_path,

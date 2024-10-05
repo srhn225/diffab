@@ -204,8 +204,8 @@ class diffabencoder(nn.Module):
         self.current_sequence_embedding = nn.Embedding(25, cfg.res_feat_dim)  # 22 is padding
         self.encoder = GAEncoder(cfg.res_feat_dim, cfg.pair_feat_dim, num_layers=6)
 
-        # Adding a final linear layer to map features down to a single value
-        self.final_linear = nn.Linear(cfg.res_feat_dim, 1)
+        # Adding adaptive average pooling layer
+        self.adaptive_pool = nn.AdaptiveAvgPool1d(100)
 
     def encode(self, batch):
         """
@@ -255,10 +255,13 @@ class diffabencoder(nn.Module):
         res_feat = self.res_feat_mixer(torch.cat([res_feat, self.current_sequence_embedding(s_0)], dim=-1))  # [Important] Incorporate sequence at the current step.
         res_feat = self.encoder(R_0, p_0, res_feat, pair_feat, mask_res)
 
-        # New part: Apply a linear layer to map each residue feature to a scalar
-        res_feat = self.final_linear(res_feat).squeeze(-1)  # Output shape: (N, L)
+        # Apply adaptive average pooling to pool the length to 100
+        res_feat = res_feat.permute(0, 2, 1)  # Change shape to (N, res_feat_dim, L) for pooling
+        res_feat = self.adaptive_pool(res_feat)  # Apply pooling
+        res_feat = res_feat.permute(0, 2, 1)  # Change shape back to (N, 100, res_feat_dim)
 
         return res_feat
+
 class EZPairEmbedding(nn.Module):
 
     def __init__(self, feat_dim, max_num_atoms, max_aa_types=22, max_relpos=32):  # 更进一步缩小参数

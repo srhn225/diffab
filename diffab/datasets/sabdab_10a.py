@@ -13,7 +13,7 @@ from Bio.PDB import PDBExceptions
 from Bio.PDB import Polypeptide
 from torch.utils.data import Dataset
 from tqdm.auto import tqdm
-
+from Bio.PDB import NeighborSearch
 from ..utils.protein import parsers, constants
 from ._base import register_dataset
 
@@ -133,6 +133,7 @@ def _label_light_chain_cdr(data, seq_map, max_cdr3_length=30):
 
     return data, seq_map
 
+from Bio.PDB import NeighborSearch
 
 def preprocess_sabdab_structure(task):
     entry = task['entry']
@@ -150,14 +151,19 @@ def preprocess_sabdab_structure(task):
         'antigen': None,
         'antigen_seqmap': None,
     }
+
     try:
+        # 检查重链和轻链的存在性，如果缺少则跳过这个条目
+        if entry['H_chain'] is None or entry['L_chain'] is None:
+            raise ValueError('Missing both heavy and light chains.')
+
         if entry['H_chain'] is not None:
             (
                 parsed['heavy'], 
                 parsed['heavy_seqmap']
             ) = _label_heavy_chain_cdr(*parsers.parse_biopython_structure(
                 model[entry['H_chain']],
-                max_resseq = 113    # Chothia, end of Heavy chain Fv
+                max_resseq=113    # Chothia, end of Heavy chain Fv
             ))
         
         if entry['L_chain'] is not None:
@@ -166,18 +172,51 @@ def preprocess_sabdab_structure(task):
                 parsed['light_seqmap']
             ) = _label_light_chain_cdr(*parsers.parse_biopython_structure(
                 model[entry['L_chain']],
-                max_resseq = 106    # Chothia, end of Light chain Fv
+                max_resseq=106    # Chothia, end of Light chain Fv
             ))
 
-        if parsed['heavy'] is None and parsed['light'] is None:
-            raise ValueError('Neither valid H-chain or L-chain is found.')
-   
-        if len(entry['ag_chains']) > 0:
-            chains = [model[c] for c in entry['ag_chains']]
-            (
-                parsed['antigen'], 
-                parsed['antigen_seqmap']
-            ) = parsers.parse_biopython_structure(chains)
+        # 如果重链or轻链不存在，则跳过此条目
+        if parsed['heavy'] is None or parsed['light'] is None:
+            raise ValueError('valid heavy or light chain is not found.')
+
+        # 检查抗原链是否存在
+        if len(entry['ag_chains']) == 0:
+            raise ValueError('No antigen chains found.')
+
+        # 如果存在抗原链，解析抗原链
+        chains = [model[c] for c in entry['ag_chains']]
+        (
+            parsed['antigen'], 
+            parsed['antigen_seqmap']
+        ) = parsers.parse_biopython_structure(chains)
+
+        # 创建 NeighborSearch 对象，包含抗体和抗原的所有原子
+        antibody_atoms = []
+        if entry['H_chain'] is not None:
+            antibody_atoms += list(model[entry['H_chain']].get_atoms())
+        if entry['L_chain'] is not None:
+            antibody_atoms += list(model[entry['L_chain']].get_atoms())
+        
+        antigen_atoms = [atom for chain in chains for atom in chain.get_atoms()]
+        ns = NeighborSearch(antigen_atoms + antibody_atoms)
+
+        # 搜索抗原和抗体原子之间距离小于10 Å 的原子对
+        contact_pairs = ns.search_all(10.0)
+
+        # 获取接触的抗原和抗体残基
+        antigen_residues = set()
+        antibody_residues = set()
+
+        for atom1, atom2 in contact_pairs:
+            if atom1.get_parent().get_parent().id in entry['ag_chains']:  # 抗原链
+                antigen_residues.add(atom1.get_parent())
+            if atom2.get_parent().get_parent().id in [entry['H_chain'], entry['L_chain']]:  # 抗体链
+                antibody_residues.add(atom2.get_parent())
+
+        # 只保留距离小于10 Å 的残基及其原子
+        parsed['antigen'] = antigen_residues
+        parsed['heavy'] = {res for res in antibody_residues if res.get_parent().id == entry['H_chain']}
+        parsed['light'] = {res for res in antibody_residues if res.get_parent().id == entry['L_chain']}
 
     except (
         PDBExceptions.PDBConstructionException, 
@@ -195,7 +234,8 @@ def preprocess_sabdab_structure(task):
     return parsed
 
 
-class SAbDabDataset(Dataset):
+
+class SAbDab10aDataset(Dataset):
 
     MAP_SIZE = 32*(1024*1024*1024)  # 32GB
 
@@ -319,7 +359,7 @@ class SAbDabDataset(Dataset):
 
     @property
     def _structure_cache_path(self):
-        return os.path.join(self.processed_dir, 'structures.lmdb')
+        return os.path.join(self.processed_dir, 'structures-10a.lmdb')
         
     def _preprocess_structures(self):
         tasks = []
@@ -461,9 +501,9 @@ class SAbDabDataset(Dataset):
         return data
 
 
-@register_dataset('sabdab')
+@register_dataset('sabdab10a')
 def get_sabdab_dataset(cfg, transform):
-    return SAbDabDataset(
+    return SAbDab10aDataset(
         summary_path = cfg.summary_path,
         chothia_dir = cfg.chothia_dir,
         processed_dir = cfg.processed_dir,
@@ -485,7 +525,7 @@ if __name__ == '__main__':
         sure = input('Sure to reset? (y/n): ')
         if sure != 'y':
             exit()
-    dataset = SAbDabDataset(
+    dataset = SAbDab10aDataset(
         processed_dir=args.processed_dir,
         split=args.split, 
         reset=args.reset

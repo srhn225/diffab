@@ -102,21 +102,25 @@ class ContrastiveDiffAb(nn.Module):
 
 
 
-        # 计算 (N, L, N, L) 形状的相似度矩阵
-        # heavy 和 antigen 的相似度
-        ha_sim = torch.einsum('nlf,mlf->nlm', heavy_feat, antigen_feat)  # (N, L, N) -> 对应每个位置的样本相似度
-        hl_sim = torch.einsum('nlf,mlf->nlm', light_feat, antigen_feat)  # light 和 antigen 的相似度
-        # temperature = 0.01
-        # ha_sim = ha_sim / temperature
-        # hl_sim = hl_sim / temperature
-
-        # 创建目标索引，目标是每个样本的相同位置
-        target = torch.arange(batch_size, device=device)  # (N,)
-        target = target.unsqueeze(1).repeat(1, heavy_feat.size(1))  # 将目标扩展为 (N, L) -> 对应位置上的匹配
-
+        ha_sim = torch.zeros(heavy_feat.shape[0], antigen_feat.shape[0]).to(device)
+        hl_sim = torch.zeros(light_feat.shape[0], antigen_feat.shape[0]).to(device)
+        # 逐位置计算余弦相似度
+        for i in range(heavy_feat.shape[0]):
+            for j in range(antigen_feat.shape[0]):
+                # 对每个位置的特征向量计算余弦相似度
+                sim = F.cosine_similarity(heavy_feat[i].T, antigen_feat[j].T, dim=0)
+                # 将所有特征维度上的相似度求和
+                ha_sim[i, j] = sim.sum()
+        for i in range(light_feat.shape[0]):
+            for j in range(antigen_feat.shape[0]):
+                # 对每个位置的特征向量计算余弦相似度
+                sim = F.cosine_similarity(light_feat[i], antigen_feat[j], dim=0)
+                # 将所有特征维度上的相似度求和
+                hl_sim[i, j] = sim.sum()
+        target = torch.arange(batch_size, device=device) 
         # 计算每个位置的对比损失
-        ha_loss = F.cross_entropy(ha_sim.contiguous().view(-1, batch_size), target.view(-1))  # Heavy 和 antigen 的位置对比损失
-        hl_loss = F.cross_entropy(hl_sim.contiguous().view(-1, batch_size), target.view(-1))  # Light 和 antigen 的位置对比损失
+        ha_loss = F.cross_entropy(ha_sim, target)  # Heavy 和 antigen 的位置对比损失
+        hl_loss = F.cross_entropy(hl_sim, target)  # Light 和 antigen 的位置对比损失
 
         # 总损失是两个损失的和
         total_loss = ha_loss + hl_loss

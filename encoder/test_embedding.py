@@ -25,13 +25,13 @@ def parse_args():
 
     # Logging and checkpointing
     parser.add_argument('--log_dir', type=str, default='./logs', help='Directory to store TensorBoard logs')
-    parser.add_argument('--save_freq', type=int, default=10, help='Frequency (in epochs) to save model checkpoints')
+    parser.add_argument('--save_freq', type=int, default=20, help='Frequency (in epochs) to save model checkpoints')
     parser.add_argument('--resume', type=str, default=None, help='Path to a checkpoint to resume from')
 
     args = parser.parse_args()
     return args
 
-def train(args, model, loader, optimizer, scheduler, logger, writer, device='cuda'):
+def train(args, model, loader, optimizer, scheduler, logger, writer, device='cuda',ckpt_dir='./'):
     """
     训练模型的主函数
 
@@ -75,15 +75,15 @@ def train(args, model, loader, optimizer, scheduler, logger, writer, device='cud
 
                 # 记录训练损失到 TensorBoard
                 writer.add_scalar('train/loss', loss.item(), global_step)
-                pbar.set_postfix(loss=loss.item())  # 在进度条中显示当前损失
+                pbar.set_postfix(loss=" {:.8f}".format( loss.item()))  # 在进度条中显示当前损失
                 pbar.update(1)
 
                 global_step += 1
-                del loss, batch
+                del batch
 
         # 保存模型检查点
         if (epoch + 1) % args.save_freq == 0:
-            save_path = os.path.join(args.save_dir, f'epoch_{epoch+1}.pt')
+            save_path = os.path.join(ckpt_dir, f'epoch_{epoch+1}.pt')
             torch.save({
                 'epoch': epoch + 1,
                 'model_state_dict': model.state_dict(),
@@ -168,6 +168,7 @@ if __name__ == "__main__":
         scheduler=scheduler,    # 学习率调度器（可选）
         logger=logger,          # 日志记录器
         writer=writer,          # TensorBoard 记录器
-        device=args.device      # 计算设备（cuda 或 cpu）
+        device=args.device,      # 计算设备（cuda 或 cpu）
+        ckpt_dir=ckpt_dir
     )
 
