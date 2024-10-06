@@ -95,20 +95,20 @@ class ContrastiveDiffAb(nn.Module):
         antigen_feat = self.antigen_encoder(batch['antigen'])
         
         # 规范化特征，保持单位长度，便于余弦相似度计算
-        heavy_feat = F.normalize(heavy_feat, p=2, dim=-1)
-        light_feat = F.normalize(light_feat, p=2, dim=-1)
-        antigen_feat = F.normalize(antigen_feat, p=2, dim=-1)
+        # heavy_feat = F.normalize(heavy_feat, p=2, dim=-1)
+        # light_feat = F.normalize(light_feat, p=2, dim=-1)
+        # antigen_feat = F.normalize(antigen_feat, p=2, dim=-1)
 
 
 
 
-        ha_sim = torch.zeros(heavy_feat.shape[0], antigen_feat.shape[0]).to(device)
-        hl_sim = torch.zeros(light_feat.shape[0], antigen_feat.shape[0]).to(device)
+        ha_sim = torch.zeros(heavy_feat.shape[0], antigen_feat.shape[0],device=device)
+        hl_sim = torch.zeros(light_feat.shape[0], antigen_feat.shape[0],device=device)
         # 逐位置计算余弦相似度
         for i in range(heavy_feat.shape[0]):
             for j in range(antigen_feat.shape[0]):
                 # 对每个位置的特征向量计算余弦相似度
-                sim = F.cosine_similarity(heavy_feat[i].T, antigen_feat[j].T, dim=0)
+                sim = F.cosine_similarity(heavy_feat[i], antigen_feat[j], dim=0)
                 # 将所有特征维度上的相似度求和
                 ha_sim[i, j] = sim.sum()
         for i in range(light_feat.shape[0]):

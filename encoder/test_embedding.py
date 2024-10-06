@@ -60,12 +60,13 @@ def train(args, model, loader, optimizer, scheduler, logger, writer, device='cud
                 batch = recursive_to(batch, device)
                 # stats = torch.cuda.memory_summary()
                 # print(stats)
-
+                optimizer.zero_grad()  # 梯度清零
                 # 前向传播
                 loss = model(batch)
                 loss.backward()  # 反向传播计算梯度
+
                 # 反向传播和优化步骤
-                optimizer.zero_grad()  # 梯度清零
+
                 
                 optimizer.step()  # 优化器更新参数
 
@@ -79,7 +80,7 @@ def train(args, model, loader, optimizer, scheduler, logger, writer, device='cud
                 pbar.update(1)
 
                 global_step += 1
-                del batch
+
 
         # 保存模型检查点
         if (epoch + 1) % args.save_freq == 0:
