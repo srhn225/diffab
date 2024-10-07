@@ -1,0 +1,17 @@
+
+model:
+  type: diffab
+  res_feat_dim: 128
+  pair_feat_dim: 64
+
+dataset:
+    type: sabdabcdr
+    summary_path: ./data/sabdab_summary_all.tsv
+    chothia_dir: ./data/all_structures/chothia
+    processed_dir: ./data/processed
+    split: train
+    filter: True
+eval:
+    batch_size: 1
+
+

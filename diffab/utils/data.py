@@ -208,6 +208,87 @@ class PaddingCollate_unmerged(object):
     #     return default_collate(data_list_padded)
 
 
+class PaddingCollate_unmerged_with_id(object):
 
+    def __init__(self, length_ref_key='aa', pad_values=DEFAULT_PAD_VALUES, no_padding=DEFAULT_NO_PADDING, eight=True):
+        super().__init__()
+        self.length_ref_key = length_ref_key
+        self.pad_values = pad_values
+        self.no_padding = no_padding
+        self.eight = eight
+
+    @staticmethod
+    def _pad_last(x, n, value=0):
+        if isinstance(x, torch.Tensor):
+            assert x.size(0) <= n
+            if x.size(0) == n:
+                return x
+            pad_size = [n - x.size(0)] + list(x.shape[1:])
+            pad = torch.full(pad_size, fill_value=value).to(x)
+            return torch.cat([x, pad], dim=0)
+        elif isinstance(x, list):
+            pad = [value] * (n - len(x))
+            return x + pad
+        else:
+            return x
+
+    @staticmethod
+    def _get_pad_mask(l, n):
+        return torch.cat([
+            torch.ones([l], dtype=torch.bool),
+            torch.zeros([n-l], dtype=torch.bool)
+        ], dim=0)
+
+    @staticmethod
+    def _get_common_keys(list_of_dict):
+        keys = set(list_of_dict[0].keys())
+        for d in list_of_dict[1:]:
+            keys = keys.intersection(d.keys())
+        return keys
+
+    def _get_pad_value(self, key):
+        if key not in self.pad_values:
+            return 0
+        return self.pad_values[key]
+
+    def __call__(self, data_list):
+        # Calculate max length for each tag individually
+        max_lengths = {
+            'heavy': max([data['heavy'][self.length_ref_key].size(0) for data in data_list]),
+            'light': max([data['light'][self.length_ref_key].size(0) for data in data_list]),
+            'antigen': max([data['antigen'][self.length_ref_key].size(0) for data in data_list])
+        }
+
+        # Adjust max lengths to be multiples of 8 if required
+        if self.eight:
+            max_lengths = {k: math.ceil(v / 8) * 8 for k, v in max_lengths.items()}
+
+        data_list_padded = []
+
+        # Process each data entry in data_list
+        for data in data_list:
+            data_padded = {}
+
+            # Handle each tag (heavy, light, antigen) separately
+            for tag in ['heavy', 'light', 'antigen']:
+                # Get common keys for the current tag across all data entries
+                keys = self._get_common_keys([d[tag] for d in data_list])
+
+                # Pad each key's content to the max length for the current tag
+                data_padded[tag] = {
+                    k: self._pad_last(data[tag][k], max_lengths[tag], value=self._get_pad_value(k))
+                    if k not in self.no_padding else data[tag][k]
+                    for k in data[tag] if k in keys
+                }
+
+                # Add mask
+                data_padded[tag]['mask'] = self._get_pad_mask(data[tag][self.length_ref_key].size(0), max_lengths[tag])
+
+            # Add the ID as a key in the padded data
+            data_padded['id'] = data['id']  # Assuming each data entry has an 'id' field
+
+            data_list_padded.append(data_padded)
+
+        return default_collate(data_list_padded)
 
 
