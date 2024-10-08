@@ -8,7 +8,7 @@ from diffab.modules.common.geometry import apply_rotation_to_vector, quaternion_
 from diffab.modules.common.so3 import so3vec_to_rotation, rotation_to_so3vec, random_uniform_so3
 from diffab.modules.encoders.ga import GAEncoder
 from .transition import RotationTransition, PositionTransition, AminoacidCategoricalTransition
-
+from encoder.RAG import retrieval_using_antigen
 
 def rotation_matrix_cosine_loss(R_pred, R_true):
     """
@@ -109,7 +109,79 @@ forward 方法接收当前的旋转向量（v_t）、位置（p_t）、序列（
         c_denoised = self.eps_seq_net(in_feat)  # Already softmax-ed, (N, L, 20)
 
         return v_next, R_next, eps_pos, c_denoised
+class EpsilonNetwithRAG(nn.Module):
 
+    def __init__(self, res_feat_dim, pair_feat_dim, num_layers, encoder_opt={}):
+        super().__init__()
+        self.current_sequence_embedding = nn.Embedding(25, res_feat_dim)  # 22 is padding
+        self.res_feat_mixer = nn.Sequential(
+            nn.Linear(res_feat_dim * 2, res_feat_dim), nn.ReLU(),
+            nn.Linear(res_feat_dim, res_feat_dim),
+        )
+        self.encoder = GAEncoder(res_feat_dim, pair_feat_dim, num_layers, **encoder_opt)
+
+        self.eps_crd_net = nn.Sequential(
+            nn.Linear(res_feat_dim+3, res_feat_dim), nn.ReLU(),
+            nn.Linear(res_feat_dim, res_feat_dim), nn.ReLU(),
+            nn.Linear(res_feat_dim, 3)
+        )
+
+        self.eps_rot_net = nn.Sequential(
+            nn.Linear(res_feat_dim+3, res_feat_dim), nn.ReLU(),
+            nn.Linear(res_feat_dim, res_feat_dim), nn.ReLU(),
+            nn.Linear(res_feat_dim, 3)
+        )
+
+        self.eps_seq_net = nn.Sequential(
+            nn.Linear(res_feat_dim+3, res_feat_dim), nn.ReLU(),
+            nn.Linear(res_feat_dim, res_feat_dim), nn.ReLU(),
+            nn.Linear(res_feat_dim, 20), nn.Softmax(dim=-1) 
+        )
+        self.prompt_attn = nn.MultiheadAttention(embed_dim=res_feat_dim, num_heads=8)
+    def forward(self, v_t, p_t, s_t, res_feat, pair_feat, beta, mask_generate, mask_res,antigen=None):
+        """
+        Args:
+            v_t:    (N, L, 3).
+            p_t:    (N, L, 3).
+            s_t:    (N, L).
+            res_feat:   (N, L, res_dim).
+            pair_feat:  (N, L, L, pair_dim).
+            beta:   (N,).
+            mask_generate:    (N, L).
+            mask_res:       (N, L).
+        Returns:
+            v_next: UPDATED (not epsilon) SO3-vector of orietnations, (N, L, 3).
+            eps_pos: (N, L, 3).
+        """
+        N, L = mask_res.size()
+        R = so3vec_to_rotation(v_t) # (N, L, 3, 3)
+
+        # s_t = s_t.clamp(min=0, max=19)  # TODO: clamping is good but ugly.
+        res_feat = self.res_feat_mixer(torch.cat([res_feat, self.current_sequence_embedding(s_t)], dim=-1)) # [Important] Incorporate sequence at the current step.
+        res_feat = self.encoder(R, p_t, res_feat, pair_feat, mask_res)
+        # mix res_feature now and RAG_feature
+        prompt_feat=retrieval_using_antigen(antigen)#按照id不如按照抗原的feature进行检索，因此batch里面需要一个额外的截断的抗原，并且用对比学习encoder计算一下
+        if promot_feat:
+            res_feat, _ = self.prompt_attn(res_feat, prompt_feat, prompt_feat)  # (N, L, res_dim)
+        t_embed = torch.stack([beta, torch.sin(beta), torch.cos(beta)], dim=-1)[:, None, :].expand(N, L, 3)
+        in_feat = torch.cat([res_feat, t_embed], dim=-1)
+
+        # Position changes
+        eps_crd = self.eps_crd_net(in_feat)    # (N, L, 3)
+        eps_pos = apply_rotation_to_vector(R, eps_crd)  # (N, L, 3)
+        eps_pos = torch.where(mask_generate[:, :, None].expand_as(eps_pos), eps_pos, torch.zeros_like(eps_pos))
+
+        # New orientation
+        eps_rot = self.eps_rot_net(in_feat)    # (N, L, 3)
+        U = quaternion_1ijk_to_rotation_matrix(eps_rot) # (N, L, 3, 3)
+        R_next = R @ U
+        v_next = rotation_to_so3vec(R_next)     # (N, L, 3)
+        v_next = torch.where(mask_generate[:, :, None].expand_as(v_next), v_next, v_t)
+
+        # New sequence categorical distributions
+        c_denoised = self.eps_seq_net(in_feat)  # Already softmax-ed, (N, L, 20)
+
+        return v_next, R_next, eps_pos, c_denoised
 
 class FullDPM(nn.Module):
 
