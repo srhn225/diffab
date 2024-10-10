@@ -13,7 +13,7 @@ from diffab.utils.data import *
 from diffab.utils.train import *
 from encoder.embedding import diffabencoder
 from encoder.models import ContrastiveDiffAb
-
+#python -m encoder.test_embedding --config ./configs/contrastive/embedding.yml
 def parse_args():
     parser = argparse.ArgumentParser(description="Amino Acid Encoding")
 

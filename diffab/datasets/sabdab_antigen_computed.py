@@ -18,6 +18,12 @@ from ..utils.protein import parsers, constants
 from ._base import register_dataset
 import numpy as np
 from encoder.models import ContrastiveDiffAb
+from diffab.utils.misc import *
+from diffab.utils.data import *
+from diffab.utils.train import *
+import torch
+import torch.nn.functional as F
+from encoder.test.choose import load_tensors_from_directory,find_top_similar
 ALLOWED_AG_TYPES = {
     'protein',
     'protein | protein',
@@ -133,7 +139,15 @@ def _label_light_chain_cdr(data, seq_map, max_cdr3_length=30):
 
     return data, seq_map
 
-
+def process_dict(input_dict):# 将一条数据包装一下，假装是一个batch
+    for key, value in input_dict.items():
+        if isinstance(value, torch.Tensor):
+            # 为 tensor 增加一个维度
+            input_dict[key] = value.unsqueeze(0)
+        elif isinstance(value, list):
+            # 将 list 转换为竖着的 tuple
+            input_dict[key] = [(item,) for item in value]
+    return input_dict
 def preprocess_sabdab_structure(task):
     entry = task['entry']
     pdb_path = task['pdb_path']
@@ -200,16 +214,38 @@ def preprocess_sabdab_structure(task):
                 for light_res in model[entry['L_chain']].get_residues():
                     antibody_atoms.extend(light_res.get_atoms())
             antigen_truncated, antigen_seqmap = parsers.parse_biopython_structure_antigen(chains,antibody_atoms=antibody_atoms)
-            batch={}
-            # 遍历antigen_truncated的每个key-value
-            for key, value in antigen_truncated.items():
-                # 如果value已经是tensor或类似数组的形式，添加一个batch维度
-                # 比如，如果value是 (n,) 的向量，变为 (1, n)
-                batch[key] = torch.unsqueeze(torch.tensor(value), dim=0)
-            model=task.model
-            antigen_feature=model.compute_antigen_feature(batch)
-            print(antigen_feature)
+            # print(antigen_truncated)
+            # for key in antigen_truncated:
+            #     print(key+type(antigen_truncated[key]).__name__)
+
+            # batch={}
+            # # 遍历antigen_truncated的每个key-value
+            # for key, value in antigen_truncated.items():
+            #     # 如果value已经是tensor或类似数组的形式，添加一个batch维度
+            #     # 比如，如果value是 (n,) 的向量，变为 (1, n)
+            #     batch[key] = torch.unsqueeze(torch.tensor(value), dim=0)
+            diffabmodel=task['model']
+            # print(batch)
+            antigen_truncated['mask']=torch.ones([antigen_truncated['aa'].size(0)], dtype=torch.bool)
+            antigen_batchlike=recursive_to(process_dict(antigen_truncated),'cuda')
+
+
+
+            antigen_feature=diffabmodel.compute_antigen_feature(antigen_batchlike)
+
+            # print(antigen_feature)
             parsed['antigen_feature']=antigen_feature
+            feature_all=task['feature_all']
+            feature_all_device=recursive_to(feature_all,'cuda')
+            similar_heavy,similar_light=compute_cosine_similarity(feature_all_device,antigen_feature[0])
+            top10_heavy=find_top_similar(similar_heavy,id=task['id'])
+            top10_light=find_top_similar(similar_light,id=task['id'])#id用于去除掉自己，防止出现数据泄露
+            # print(top10_heavy)
+            # print(top10_light)
+
+            parsed['topn_heavy']=top10_heavy
+            parsed['topn_light']=top10_light
+
 
             # # 使用NeighborSearch进行抗原链-抗体链原子接触搜索
             # ns = NeighborSearch(antibody_atoms)
@@ -278,9 +314,11 @@ class SAbDabDatasetWithAntigen(Dataset):
         transform = None,
         reset = False,
         filter_invalid = False,
+        feature_all=None
 
     ):
         super().__init__()
+        self.feature_all=feature_all
         self.model=model
         self.summary_path = summary_path
         self.filter_invalid=filter_invalid
@@ -390,7 +428,7 @@ class SAbDabDatasetWithAntigen(Dataset):
 
     @property
     def _structure_cache_path(self):
-        return os.path.join(self.processed_dir, 'structures-cdr.lmdb')
+        return os.path.join(self.processed_dir, 'structures-computed.lmdb')
         
     def _preprocess_structures(self):
         tasks = []
@@ -403,7 +441,8 @@ class SAbDabDatasetWithAntigen(Dataset):
                 'id': entry['id'],
                 'entry': entry,
                 'pdb_path': pdb_path,
-                'model': self.model  # 仍然保留 model，但只是顺序执行
+                'model': self.model,  # 仍然保留 model，但只是顺序执行
+                'feature_all':self.feature_all
             })
 
         # 改为逐条处理任务
@@ -546,8 +585,18 @@ def get_sabdab_dataset(cfg, transform):
     )
 
 
-import torch
 
+def compute_cosine_similarity(data, target_tensor):
+    """Compute cosine similarity between target_tensor and all tensors in data."""
+    similarities_heavy = {}
+    similarities_light={}
+    for filename, interface in data.items():
+        light_feature = interface['light_feature']
+        heavy_feature=interface['heavy_feature']
+        similarities_heavy[filename] = F.cosine_similarity(target_tensor, heavy_feature[0], dim=0).sum()
+        similarities_light[filename] = F.cosine_similarity(target_tensor, light_feature[0], dim=0).sum()
+
+    return similarities_heavy,similarities_light
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
@@ -556,7 +605,9 @@ if __name__ == '__main__':
     parser.add_argument('--reset', action='store_true', default=False)
     parser.add_argument('--model_config_path', type=str, required=True)
     parser.add_argument('--model_checkpoint', type=str, required=True)
+    parser.add_argument('--tensor_directory', type=str, required=True)
     args = parser.parse_args()
+    feature_all=load_tensors_from_directory(args.tensor_directory)
 
     if args.reset:
         sure = input('Sure to reset? (y/n): ')
@@ -564,20 +615,25 @@ if __name__ == '__main__':
             exit()
 
     # 初始化模型
-    model = ContrastiveDiffAb(args.model_config_path)
-
+    config, config_name = load_config(args.model_config_path)
+    print("building model...")
+    model = ContrastiveDiffAb(config.model).to('cuda')
+    print('building complete,starting load checkpoints...')
     # 加载 checkpoint
     checkpoint = torch.load(args.model_checkpoint)
     model.load_state_dict(checkpoint['model_state_dict'])
+    print('checkpoint loaded,start processing...')
 
     # 初始化数据集
     dataset = SAbDabDatasetWithAntigen(
         model=model,
         processed_dir=args.processed_dir,
         split=args.split,
-        reset=args.reset
+        reset=args.reset,
+        feature_all=feature_all
     )
 
     # 打印样本和数据集信息
     print(dataset[114])
     print(len(dataset), len(dataset.clusters))
+#python -m diffab.datasets.sabdab_antigen_computed --model_config_path ./configs/contrastive/embedding.yml --model_checkpoint ./logs/embedding_2024_10_07__01_17_28/checkpoints/epoch_200.pt --tensor_directory ./feature_data/compute_2024_10_07__16_28_21_compute/checkpoints --reset

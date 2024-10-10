@@ -21,12 +21,22 @@ def compute_cosine_similarity(data, target_tensor):
         similarities[filename] = F.cosine_similarity(target_tensor, antigen_feature[0], dim=0).sum()
     return similarities
 
-def find_top_similar(similarity_dict, top_n=10):
-    """Find the top N files with the highest cosine similarity."""
-    # Sort the similarity dictionary by values (similarity scores) in descending order
-    sorted_similarities = sorted(similarity_dict.items(), key=lambda x: x[1], reverse=True)
+def find_top_similar(similarity_dict, top_n=10, id=None):
+    """Find the top N files with the highest cosine similarity, excluding entries with the given id."""
+    
+    # If an id is provided, filter out entries where id appears in the key (file name)
+    if id is not None:
+        filtered_dict = {k: v for k, v in similarity_dict.items() if id not in k}
+    else:
+        filtered_dict = similarity_dict
+
+
+    # Sort the remaining similarity dictionary by values (similarity scores) in descending order
+    sorted_similarities = sorted(filtered_dict.items(), key=lambda x: x[1], reverse=True)
+    
     # Return the top N results
     return sorted_similarities[:top_n]
+
 
 if __name__ == "__main__":
     # Argument parsing

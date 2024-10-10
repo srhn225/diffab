@@ -131,13 +131,15 @@ class ContrastiveDiffAb(nn.Module):
     # 用训练好的模型计算抗体（heavy 和 light 链）的特征
     def compute_antibody_feature(self, chain):
         # 假设 heavy 和 light 输入是经过适当预处理的
-        feat = self.antibody_encoder(chain)
+        with torch.no_grad():
+            feat = self.antibody_encoder(chain)
         return feat
 
     # 用训练好的模型计算抗原的特征
     def compute_antigen_feature(self, antigen):
         # 假设 antigen 输入是经过适当预处理的
-        antigen_feat = self.antigen_encoder(antigen)
+        with torch.no_grad():
+            antigen_feat = self.antigen_encoder(antigen)
         
         # 可以选择是否要对特征进行规范化
         # antigen_feat = F.normalize(antigen_feat, p=2, dim=-1)
