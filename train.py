@@ -14,15 +14,17 @@ from diffab.models import get_model
 from diffab.utils.misc import *
 from diffab.utils.data import *
 from diffab.utils.train import *
-
+import torch.multiprocessing as mp
 
 if __name__ == '__main__':
+        
+    mp.set_start_method('spawn', force=True)
     parser = argparse.ArgumentParser()
     parser.add_argument('config', type=str)
     parser.add_argument('--logdir', type=str, default='./logs')
     parser.add_argument('--debug', action='store_true', default=False)
     parser.add_argument('--device', type=str, default='cuda')
-    parser.add_argument('--num_workers', type=int, default=8)
+    parser.add_argument('--num_workers', type=int, default=0)
     parser.add_argument('--tag', type=str, default='')
     parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('--finetune', type=str, default=None)
@@ -58,11 +60,11 @@ if __name__ == '__main__':
     train_iterator = inf_iterator(DataLoader(
         train_dataset, 
         batch_size=config.train.batch_size, 
-        collate_fn=PaddingCollate(), 
+        collate_fn=PaddingCollate(no_padding=['topn_heavy','topn_light']), 
         shuffle=True,
         num_workers=args.num_workers
     ))
-    val_loader = DataLoader(val_dataset, batch_size=config.train.batch_size, collate_fn=PaddingCollate(), shuffle=False, num_workers=args.num_workers)
+    val_loader = DataLoader(val_dataset, batch_size=config.train.batch_size, collate_fn=PaddingCollate(no_padding=['topn_heavy','topn_light']), shuffle=False, num_workers=args.num_workers)
     logger.info('Train %d | Val %d' % (len(train_dataset), len(val_dataset)))
 
     # Model
@@ -95,7 +97,7 @@ if __name__ == '__main__':
 
         # Prepare data
         batch = recursive_to(next(train_iterator), args.device)
-        print(batch)
+        
 
         # Forward
         # if args.debug: torch.set_anomaly_enabled(True)

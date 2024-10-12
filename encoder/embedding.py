@@ -254,13 +254,19 @@ class diffabencoder(nn.Module):
         s_0 = batch['aa']
         res_feat = self.res_feat_mixer(torch.cat([res_feat, self.current_sequence_embedding(s_0)], dim=-1))  # [Important] Incorporate sequence at the current step.
         res_feat = self.encoder(R_0, p_0, res_feat, pair_feat, mask_res)
+        masked_res_feats = []  # 初始化一个列表
 
-        # Apply adaptive average pooling to pool the length to 100
-        res_feat = res_feat.permute(0, 2, 1)  # Change shape to (N, res_feat_dim, L) for pooling
-        res_feat = self.adaptive_pool(res_feat)  # Apply pooling
-        res_feat = res_feat.permute(0, 2, 1)  # Change shape back to (N, 100, res_feat_dim)
+        for i in range(res_feat.size(0)):  # Iterate over batch dimension N
+            masked_res_feat = res_feat[i][mask_res[i].bool()]  # 过滤未掩码的元素,形状[L,feature_dim]
+            masked_res_feat=masked_res_feat.T
+            masked_res_feat = self.adaptive_pool(masked_res_feat) 
+            masked_res_feat=masked_res_feat.T
 
-        return res_feat
+            masked_res_feats.append(masked_res_feat)  # 将每次的结果添加到列表中
+        # 将列表转换为张量
+        res_feat_filtered = torch.stack(masked_res_feats)  # 如果每个元素形状一致
+
+        return res_feat_filtered
 
 class EZPairEmbedding(nn.Module):
 

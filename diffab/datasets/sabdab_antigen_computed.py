@@ -299,7 +299,7 @@ def preprocess_sabdab_structure(task):
 
 
 
-class SAbDabDatasetWithAntigen(Dataset):
+class SAbDabDatasetWithtopn(Dataset):
 
     MAP_SIZE = 32*(1024*1024*1024)  # 32GB
 
@@ -572,16 +572,17 @@ class SAbDabDatasetWithAntigen(Dataset):
         return data
 
 
-@register_dataset('sabdabcdr')
+@register_dataset('sabdabtopn')
 def get_sabdab_dataset(cfg, transform):
-    return SAbDabDatasetWithAntigen(
+    return SAbDabDatasetWithtopn(
         summary_path = cfg.summary_path,
         chothia_dir = cfg.chothia_dir,
         processed_dir = cfg.processed_dir,
         split = cfg.split,
         split_seed = cfg.get('split_seed', 2022),
         transform = transform,
-        filter_invalid = cfg.get('filter', False)
+        filter_invalid = cfg.get('filter', False),
+        model=None
     )
 
 
@@ -625,7 +626,7 @@ if __name__ == '__main__':
     print('checkpoint loaded,start processing...')
 
     # 初始化数据集
-    dataset = SAbDabDatasetWithAntigen(
+    dataset = SAbDabDatasetWithtopn(
         model=model,
         processed_dir=args.processed_dir,
         split=args.split,

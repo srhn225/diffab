@@ -1,6 +1,6 @@
 # Transforms
 from .mask import MaskSingleCDR, MaskMultipleCDRs, MaskAntibody
-from .merge import MergeChains
+from .merge import MergeChains,MergeChains_robust
 from .patch import PatchAroundAnchor
 
 # Factory
