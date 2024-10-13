@@ -8,8 +8,8 @@ from diffab.modules.common.geometry import apply_rotation_to_vector, quaternion_
 from diffab.modules.common.so3 import so3vec_to_rotation, rotation_to_so3vec, random_uniform_so3
 from diffab.modules.encoders.ga import GAEncoder
 from .transition import RotationTransition, PositionTransition, AminoacidCategoricalTransition
-from encoder.RAG import retrieval_with_id
-
+from encoder.RAG import retrieval_with_id,retrieval_data_with_id
+from encoder.embedding import *
 def rotation_matrix_cosine_loss(R_pred, R_true):
     """
     Args:
@@ -620,7 +620,7 @@ class FullDPMwithRAG(nn.Module):
 # new model:有独立计算RAGfeature模块的更复杂的model。
 class EpsilonNetwithRAGcal(nn.Module):
 
-    def __init__(self, res_feat_dim, pair_feat_dim, num_layers, encoder_opt={}):
+    def __init__(self, res_feat_dim, pair_feat_dim, num_layers, cfg,encoder_opt={}):
         super().__init__()
         self.current_sequence_embedding = nn.Embedding(25, res_feat_dim)  # 22 is padding
         self.res_feat_mixer = nn.Sequential(
@@ -646,6 +646,7 @@ class EpsilonNetwithRAGcal(nn.Module):
             nn.Linear(res_feat_dim, res_feat_dim), nn.ReLU(),
             nn.Linear(res_feat_dim, 20), nn.Softmax(dim=-1) 
         )
+        self.prompt_encoder=diffabencoder(cfg)
 
         # # 定义 prompt_feature_mixer 将 (N, 10, L, res_dim) 转换为 (N, L, res_dim)
         # self.prompt_feature_mixer = nn.Sequential(
@@ -662,16 +663,24 @@ class EpsilonNetwithRAGcal(nn.Module):
         res_feat = self.encoder(R, p_t, res_feat, pair_feat, mask_res)
 
         # 检索 RAG 特征
-        prompt_feat_heavy, prompt_feat_light = retrieval_with_id(topnheavy, topnlight, feature_directory)#(N,10,L,resdim)
+        prompt_data_heavy, prompt_data_light = retrieval_data_with_id(topnheavy, topnlight, feature_directory)#(N,10,L,resdim)
+
         
         # 如果有 prompt 特征，混合 res_feat 和 prompt_feat
 
-        if prompt_feat_heavy is not None or prompt_feat_light is not None:
-            prompt_feat = torch.cat([prompt_feat_heavy, prompt_feat_light], dim=1)  # 重链和轻链拼接
+        if prompt_data_heavy is not None and prompt_data_light is not None:
+            prompt_feature_heavy=self.prompt_encoder(prompt_data_heavy)
+            prompt_feature_light=self.prompt_encoder(prompt_data_light)
+            prompt_feature_all=torch.cat([prompt_feature_heavy,prompt_feature_light],dim=1) # (N, 2n ,100, res_dim)
        
-            prompt_feat = prompt_feat.mean(dim=1)  # (N, 100, res_dim)
+            prompt_feature_all = prompt_feature_all.mean(dim=1)  # (N, 100, res_dim)
 
-            res_feat, _ = self.prompt_attn(res_feat, prompt_feat, prompt_feat)  # (N, L, res_dim)
+
+
+            res_feat, _ = self.prompt_attn(res_feat, prompt_feature_all, prompt_feature_all)  # (N, L, res_dim)
+        else:
+            print("No data retrived,check the code or configs!")
+            raise
 
         t_embed = torch.stack([beta, torch.sin(beta), torch.cos(beta)], dim=-1)[:, None, :].expand(N, L, 3)
         in_feat = torch.cat([res_feat, t_embed], dim=-1)
@@ -699,6 +708,7 @@ class FullDPMwithRAGcal(nn.Module):
         res_feat_dim, 
         pair_feat_dim, 
         num_steps, 
+        cfg,
         eps_net_opt={}, 
         trans_rot_opt={}, 
         trans_pos_opt={}, 
@@ -707,11 +717,12 @@ class FullDPMwithRAGcal(nn.Module):
         position_scale=[10.0],
     ):
         super().__init__()
-        self.eps_net = EpsilonNetwithRAGcal(res_feat_dim, pair_feat_dim, **eps_net_opt)
+        self.eps_net = EpsilonNetwithRAGcal(res_feat_dim, pair_feat_dim,cfg=cfg, **eps_net_opt)
         self.num_steps = num_steps
         self.trans_rot = RotationTransition(num_steps, **trans_rot_opt)#加噪声模块
         self.trans_pos = PositionTransition(num_steps, **trans_pos_opt)
         self.trans_seq = AminoacidCategoricalTransition(num_steps, **trans_seq_opt)
+
 
         self.register_buffer('position_mean', torch.FloatTensor(position_mean).view(1, 1, -1))
         self.register_buffer('position_scale', torch.FloatTensor(position_scale).view(1, 1, -1))

@@ -8,7 +8,7 @@ dataset:
     type: sabdabcdr
     summary_path: ./data/sabdab_summary_all.tsv
     chothia_dir: ./data/all_structures/chothia
-    processed_dir: ./data/processed
+    processed_dir: ./data/processed/sabdab_cdr
     split: train
     filter: True
 

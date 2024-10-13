@@ -292,7 +292,9 @@ class DiffusionAntibodyDesignwithRAGcal(nn.Module):
         self.diffusion = FullDPMwithRAGcal(
             cfg.res_feat_dim,
             cfg.pair_feat_dim,
+            cfg=cfg.encoder,
             **cfg.diffusion,
+            
         )
 
     def encode(self, batch, remove_structure, remove_sequence):

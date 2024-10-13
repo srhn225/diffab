@@ -32,3 +32,5 @@ def retrieval_with_id(topnheavy_batch, topnlight_batch, feature_directory):
     light_tensor = load_tensor_batch(topnlight_batch, 'light_feature', feature_directory)
     
     return heavy_tensor, light_tensor
+def retrieval_data_with_id(topnheavy_batch, topnlight_batch, feature_directory):
+    pass

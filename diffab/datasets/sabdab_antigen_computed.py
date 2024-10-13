@@ -602,7 +602,7 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--split', type=str, default='train')
-    parser.add_argument('--processed_dir', type=str, default='./data/processed')
+    parser.add_argument('--processed_dir', type=str, default='./data/processed/antigen_computed')
     parser.add_argument('--reset', action='store_true', default=False)
     parser.add_argument('--model_config_path', type=str, required=True)
     parser.add_argument('--model_checkpoint', type=str, required=True)
