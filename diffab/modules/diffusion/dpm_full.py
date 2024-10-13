@@ -8,7 +8,7 @@ from diffab.modules.common.geometry import apply_rotation_to_vector, quaternion_
 from diffab.modules.common.so3 import so3vec_to_rotation, rotation_to_so3vec, random_uniform_so3
 from diffab.modules.encoders.ga import GAEncoder
 from .transition import RotationTransition, PositionTransition, AminoacidCategoricalTransition
-from encoder.RAG import retrieval_with_id,retrieval_data_with_id
+from encoder.RAG import retrieval_feature_with_id,retrieval_data_with_id
 from encoder.embedding import *
 def rotation_matrix_cosine_loss(R_pred, R_true):
     """
@@ -370,7 +370,7 @@ class EpsilonNetwithRAG(nn.Module):
         res_feat = self.encoder(R, p_t, res_feat, pair_feat, mask_res)
 
         # 检索 RAG 特征
-        prompt_feat_heavy, prompt_feat_light = retrieval_with_id(topnheavy, topnlight, feature_directory)#(N,10,L,resdim)
+        prompt_feat_heavy, prompt_feat_light = retrieval_feature_with_id(topnheavy, topnlight, feature_directory)#(N,10,L,resdim)
         
         # 如果有 prompt 特征，混合 res_feat 和 prompt_feat
 
@@ -663,21 +663,50 @@ class EpsilonNetwithRAGcal(nn.Module):
         res_feat = self.encoder(R, p_t, res_feat, pair_feat, mask_res)
 
         # 检索 RAG 特征
-        prompt_data_heavy, prompt_data_light = retrieval_data_with_id(topnheavy, topnlight, feature_directory)#(N,10,L,resdim)
+        prompt_data_heavy, prompt_data_light = retrieval_data_with_id(topnheavy, topnlight, feature_directory)
+        #list[[dict1,dict2...dict_topn],[dict1,dict2...dict_topn],...batchsize]
 
         
         # 如果有 prompt 特征，混合 res_feat 和 prompt_feat
 
         if prompt_data_heavy is not None and prompt_data_light is not None:
-            prompt_feature_heavy=self.prompt_encoder(prompt_data_heavy)
-            prompt_feature_light=self.prompt_encoder(prompt_data_light)
-            prompt_feature_all=torch.cat([prompt_feature_heavy,prompt_feature_light],dim=1) # (N, 2n ,100, res_dim)
-       
-            prompt_feature_all = prompt_feature_all.mean(dim=1)  # (N, 100, res_dim)
+            prompt_feature_list = []
+
+        
+            for batch_idx in range(len(prompt_data_heavy)):  # 遍历每个 batch
+                prompt_feature_heavy_list = []
+                prompt_feature_light_list = []
+
+                # 遍历每个 batch 中的 topnheavy 和 topnlight
+                for topn_idx in range(len(prompt_data_heavy[batch_idx])):
+                    # 计算单个 prompt 特征
+                    prompt_feature_heavy = self.prompt_encoder(prompt_data_heavy[batch_idx][topn_idx])
+                    prompt_feature_light = self.prompt_encoder(prompt_data_light[batch_idx][topn_idx])
+
+                    # 将每个 topn 的特征存储到列表中
+                    prompt_feature_heavy_list.append(prompt_feature_heavy[0])
+                    prompt_feature_light_list.append(prompt_feature_light[0])
+
+                # 拼接 topnheavy 和 topnlight 特征，生成 prompt_feature_all
+                prompt_feature_heavy_all = torch.stack(prompt_feature_heavy_list)  # ( topnheavy, 100, res_dim)
+                prompt_feature_light_all = torch.stack(prompt_feature_light_list)  # ( topnlight, 100, res_dim)
+
+
+                # 合并 heavy 和 light 特征
+                prompt_feature_all = torch.cat([prompt_feature_heavy_all, prompt_feature_light_all], dim=0)  # (2topn, 100, res_dim)
+                # print(prompt_feature_all.shape)
+                
+                # 在第二个维度上进行平均操作 (将 topn 的维度去掉)
+                prompt_feature_all = prompt_feature_all.mean(dim=0)  # (100, res_dim)
+                # print(prompt_feature_all.shape)
+                prompt_feature_list.append(prompt_feature_all)
+            prompt_feature_final=torch.stack(prompt_feature_list)
 
 
 
-            res_feat, _ = self.prompt_attn(res_feat, prompt_feature_all, prompt_feature_all)  # (N, L, res_dim)
+                # 进行注意力机制的计算，将 prompt_feature_all 与 res_feat 交互
+            res_feat, _ = self.prompt_attn(res_feat, prompt_feature_final, prompt_feature_final)  # (N, L, res_dim)
+
         else:
             print("No data retrived,check the code or configs!")
             raise

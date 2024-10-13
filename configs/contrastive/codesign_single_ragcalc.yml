@@ -1,0 +1,62 @@
+model:
+  type: ragdiffabcal
+  res_feat_dim: 128
+  pair_feat_dim: 64
+  diffusion:
+    num_steps: 100
+    eps_net_opt:
+      num_layers: 6
+  train_structure: true
+  train_sequence: true
+  feature_directory: ./feature_data/compute_2024_10_13__16_28_25_compute/checkpoints
+  prompt_encoder:
+      type: diffab
+      res_feat_dim: 128
+      pair_feat_dim: 64
+
+
+
+train:
+  loss_weights:
+    rot: 1.0
+    pos: 1.0
+    seq: 1.0
+  max_iters: 200_000
+  val_freq: 1000
+  batch_size: 2
+  seed: 2022
+  max_grad_norm: 100.0
+  optimizer:
+    type: adam
+    lr: 1.e-4
+    weight_decay: 0.0
+    beta1: 0.9
+    beta2: 0.999
+  scheduler:
+    type: plateau
+    factor: 0.8
+    patience: 10
+    min_lr: 5.e-6
+
+dataset:
+  train:
+    type: sabdabtopn
+    summary_path: ./data/sabdab_summary_all.tsv
+    chothia_dir: ./data/all_structures/chothia
+    processed_dir: ./data/processed
+    split: train
+    transform:
+    - type: mask_single_cdr
+    - type: merge_chains_robust
+    - type: patch_around_anchor
+  val:
+    type: sabdabtopn
+    summary_path: ./data/sabdab_summary_all.tsv
+    chothia_dir: ./data/all_structures/chothia
+    processed_dir: ./data/processed
+    split: val
+    transform:
+    - type: mask_single_cdr
+      selection: CDR3
+    - type: merge_chains_robust
+    - type: patch_around_anchor

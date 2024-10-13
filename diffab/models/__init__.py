@@ -1,3 +1,3 @@
-from .diffab import DiffusionAntibodyDesign
+from .diffab import DiffusionAntibodyDesign,DiffusionAntibodyDesignwithRAG,DiffusionAntibodyDesignwithRAGcal
 
 from ._base import get_model
